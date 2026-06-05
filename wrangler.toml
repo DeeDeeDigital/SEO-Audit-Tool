@@ -1,12 +1,14 @@
 name = "seo-audit-tool"
 compatibility_date = "2024-01-01"
 
-# Local dev: run `npx wrangler pages dev dist --port 8788`
-# Vite proxies /api → localhost:8788
+# Static assets — serves the Vite build output
+[assets]
+directory = "./dist"
+binding = "ASSETS"
 
 # Environment variables for local dev
 # Copy .env.example to .env and fill in values — Wrangler reads .env automatically
-# For production, set secrets in Cloudflare Pages dashboard > Settings > Environment variables
+# For production, set in Cloudflare dashboard > Workers > seo-audit-tool > Settings > Variables
 
 [vars]
-# PAGESPEED_API_KEY = ""  # Set in CF Pages dashboard, not here
+# PAGESPEED_API_KEY = ""  # Set in CF dashboard, not here
