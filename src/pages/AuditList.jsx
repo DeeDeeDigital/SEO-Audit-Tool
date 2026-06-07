@@ -131,7 +131,7 @@ export default function AuditList() {
           </div>
         ) : (
           <div className="space-y-2">
-            {audits.map(audit => {
+            {(audits ?? []).map(audit => {
               const pct = passPercent(audit.sections)
               return (
                 <div
