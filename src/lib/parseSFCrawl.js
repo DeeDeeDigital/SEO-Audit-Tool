@@ -1,14 +1,16 @@
 /**
- * Screaming Frog "Internal" tab CSV parser.
+ * Screaming Frog CSV parsers.
  *
- * Input:  raw text of the SF internal export (UTF-8 or UTF-8 BOM)
- * Output: sfData summary object stored in Supabase sf_data column
+ * Handles three SF export types — auto-detected from column headers:
+ *   - Internal tab  (Bulk Export → All Internal URLs)
+ *   - Search Console tab  (Bulk Export → Search Console → All)
+ *   - Analytics (GA4) tab  (Bulk Export → Analytics → All)
  *
- * Handles:
+ * All parsers handle:
  *   - UTF-8 BOM
- *   - CRLF + LF line endings (Windows SF exports use CRLF)
- *   - Quoted fields with commas inside (RFC 4180)
- *   - Missing columns gracefully (older SF versions may omit some)
+ *   - CRLF + LF line endings (Windows SF exports)
+ *   - Quoted fields with commas (RFC 4180)
+ *   - Missing / renamed columns gracefully
  */
 
 // ─── CSV Parser ───────────────────────────────────────────────────────────────
@@ -206,5 +208,222 @@ export function parseSFCrawl(csvText, filename) {
     // Combined keys for checklist auto-status
     titleIssues,
     h1Issues,
+  }
+}
+
+// ─── Export type detector ─────────────────────────────────────────────────────
+
+/**
+ * Sniff which SF export type a CSV is based on its header row.
+ * Returns: 'internal' | 'gsc' | 'ga4' | 'unknown'
+ */
+export function detectSFExportType(csvText) {
+  const src = csvText.charCodeAt(0) === 0xFEFF ? csvText.slice(1) : csvText
+  const firstLine = src.split(/\r?\n/)[0].toLowerCase()
+
+  const has = (term) => firstLine.includes(term)
+
+  // GSC: always has clicks + impressions + position, never has title / h1
+  if (has('clicks') && has('impressions') && has('position') && !has('title 1')) return 'gsc'
+
+  // GA4: has sessions (or engaged sessions) but not the on-page columns
+  if ((has('sessions') || has('engaged sessions') || has('active users')) && !has('title 1')) return 'ga4'
+
+  // Internal: has address + on-page columns
+  if (has('address') && (has('title 1') || has('h1-1') || has('status code'))) return 'internal'
+
+  return 'unknown'
+}
+
+// ─── GSC parser ───────────────────────────────────────────────────────────────
+
+/**
+ * Parse a Screaming Frog "Search Console" tab export.
+ * Bulk Export → Search Console → All
+ *
+ * Returns a GSC summary object for storing in sfData.gsc
+ */
+export function parseSFSearchConsole(csvText, filename) {
+  const rows = parseCSVRows(csvText)
+  if (rows.length < 2) throw new Error('Search Console CSV appears empty.')
+
+  const headers = rows[0]
+  const col = makeColFinder(headers)
+
+  const addrCol   = col('address')
+  // SF uses these column names — try variants
+  const clicksCol = col('clicks') !== -1 ? col('clicks') : col('clicks 1')
+  const imprCol   = col('impressions') !== -1 ? col('impressions') : col('impressions 1')
+  // CTR may be "ctr", "ctr (%)" — stored as decimal (0.054) or percent string (5.4%)
+  const ctrCol    = col('ctr') !== -1 ? col('ctr') : col('ctr (%)')
+  // Position may be "position" or "average position"
+  const posCol    = col('position') !== -1 ? col('position') : col('average position')
+
+  if (addrCol === -1) throw new Error('Not a Screaming Frog Search Console export — "Address" column missing.')
+  if (clicksCol === -1 || imprCol === -1) throw new Error('Not a Screaming Frog Search Console export — Clicks/Impressions columns missing.')
+
+  const dataRows = rows.slice(1).filter(r => r[addrCol]?.trim())
+
+  let totalClicks = 0
+  let totalImpressions = 0
+  let totalPosition = 0
+  let posCount = 0
+  let urlsWithClicks = 0
+  const urlData = []
+
+  for (const row of dataRows) {
+    const url    = row[addrCol]?.trim() ?? ''
+    const clicks = parseInt(row[clicksCol]) || 0
+    const impr   = parseInt(row[imprCol])   || 0
+    let   ctr    = ctrCol !== -1 ? parseFloat(row[ctrCol]) || 0 : 0
+    const pos    = posCol !== -1 ? parseFloat(row[posCol]) || 0 : 0
+
+    // Normalise CTR: if > 1 it was stored as a percentage (e.g. 5.4), convert to decimal
+    if (ctr > 1) ctr = ctr / 100
+
+    totalClicks      += clicks
+    totalImpressions += impr
+    if (clicks > 0) urlsWithClicks++
+    if (pos > 0) { totalPosition += pos; posCount++ }
+
+    urlData.push({ url, clicks, impr, ctr, pos })
+  }
+
+  const avgPosition = posCount > 0 ? Math.round((totalPosition / posCount) * 10) / 10 : null
+  const avgCTR      = totalImpressions > 0
+    ? Math.round((totalClicks / totalImpressions) * 10000) / 100  // as %
+    : null
+
+  // Top 25 pages by clicks
+  const topPages = urlData
+    .filter(r => r.clicks > 0)
+    .sort((a, b) => b.clicks - a.clicks)
+    .slice(0, 25)
+    .map(r => ({
+      url:         r.url,
+      clicks:      r.clicks,
+      impressions: r.impr,
+      ctr:         Math.round(r.ctr * 10000) / 100,  // store as %
+      position:    r.pos > 0 ? Math.round(r.pos * 10) / 10 : null,
+    }))
+
+  // Low CTR pages: ranking in top 20 but CTR < 2% — opportunity list
+  const lowCTR = urlData
+    .filter(r => r.pos > 0 && r.pos <= 20 && r.ctr < 0.02 && r.impr >= 50)
+    .sort((a, b) => b.impr - a.impr)
+    .slice(0, 10)
+    .map(r => ({
+      url:         r.url,
+      impressions: r.impr,
+      position:    Math.round(r.pos * 10) / 10,
+      ctr:         Math.round(r.ctr * 10000) / 100,
+    }))
+
+  return {
+    uploadedAt:       new Date().toISOString(),
+    filename:         filename ?? 'search-console.csv',
+    totalUrls:        dataRows.length,
+    totalClicks,
+    totalImpressions,
+    avgCTR,
+    avgPosition,
+    urlsWithClicks,
+    topPages,
+    lowCTR,
+  }
+}
+
+// ─── GA4 parser ───────────────────────────────────────────────────────────────
+
+/**
+ * Parse a Screaming Frog "Analytics (Google Analytics 4)" tab export.
+ * Bulk Export → Analytics (Google Analytics 4) → All
+ *
+ * Returns a GA4 summary object for storing in sfData.ga4
+ */
+export function parseSFAnalytics(csvText, filename) {
+  const rows = parseCSVRows(csvText)
+  if (rows.length < 2) throw new Error('Analytics CSV appears empty.')
+
+  const headers = rows[0]
+  const col = makeColFinder(headers)
+
+  const addrCol = col('address')
+  if (addrCol === -1) throw new Error('Not a Screaming Frog Analytics export — "Address" column missing.')
+
+  // SF GA4 export column name variants across versions
+  const sessionsCol  = col('sessions')         !== -1 ? col('sessions')
+                     : col('ga4 sessions')     !== -1 ? col('ga4 sessions')
+                     : col('total sessions')   !== -1 ? col('total sessions') : -1
+
+  const engagedCol   = col('engaged sessions') !== -1 ? col('engaged sessions')
+                     : col('ga4 engaged sessions') !== -1 ? col('ga4 engaged sessions') : -1
+
+  const usersCol     = col('active users')     !== -1 ? col('active users')
+                     : col('users')            !== -1 ? col('users')
+                     : col('total users')      !== -1 ? col('total users') : -1
+
+  const newUsersCol  = col('new users')        !== -1 ? col('new users')
+                     : col('ga4 new users')    !== -1 ? col('ga4 new users') : -1
+
+  const bounceCol    = col('bounce rate')      !== -1 ? col('bounce rate')
+                     : col('ga4 bounce rate')  !== -1 ? col('ga4 bounce rate') : -1
+
+  if (sessionsCol === -1) {
+    throw new Error(
+      'Not a Screaming Frog Analytics export — Sessions column not found. ' +
+      'Export using Bulk Export → Analytics (Google Analytics 4) → All.'
+    )
+  }
+
+  const dataRows = rows.slice(1).filter(r => r[addrCol]?.trim())
+
+  let totalSessions  = 0
+  let totalEngaged   = 0
+  let totalUsers     = 0
+  const urlData = []
+
+  for (const row of dataRows) {
+    const url      = row[addrCol]?.trim() ?? ''
+    const sessions = parseInt(row[sessionsCol]) || 0
+    const engaged  = engagedCol  !== -1 ? (parseInt(row[engagedCol])  || 0) : 0
+    const users    = usersCol    !== -1 ? (parseInt(row[usersCol])    || 0) : 0
+
+    totalSessions += sessions
+    totalEngaged  += engaged
+    totalUsers    += users
+
+    urlData.push({ url, sessions, engaged, users })
+  }
+
+  const engagementRate = totalSessions > 0
+    ? Math.round((totalEngaged / totalSessions) * 1000) / 10
+    : null
+
+  // Top 25 pages by sessions
+  const topPages = urlData
+    .filter(r => r.sessions > 0)
+    .sort((a, b) => b.sessions - a.sessions)
+    .slice(0, 25)
+    .map(r => ({
+      url:      r.url,
+      sessions: r.sessions,
+      engaged:  r.engaged || null,
+      users:    r.users   || null,
+    }))
+
+  // Zero-traffic pages: in the crawl but no GA4 sessions (potential content quality issue)
+  const zeroTraffic = urlData.filter(r => r.sessions === 0).length
+
+  return {
+    uploadedAt:      new Date().toISOString(),
+    filename:        filename ?? 'analytics-ga4.csv',
+    totalUrls:       dataRows.length,
+    totalSessions,
+    totalEngaged,
+    totalUsers,
+    engagementRate,
+    zeroTraffic,
+    topPages,
   }
 }

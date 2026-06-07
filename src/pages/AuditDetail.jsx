@@ -149,20 +149,42 @@ export default function AuditDetail() {
     setOpenSections(Object.fromEntries(AUDIT_SECTIONS.map(s => [s.id, false])))
   }
 
-  async function handleSFUpload(data) {
-    setSfData(data)
-    await supabase
-      .from('site_audits')
-      .update({ sf_data: data, updated_at: new Date().toISOString() })
-      .eq('id', id)
+  async function handleSFUpload(data, type) {
+    setSfData(prev => {
+      let next
+      if (type === 'internal') {
+        // Internal data lives at the root (for sfAutoKey compatibility); preserve gsc/ga4
+        next = { ...(prev?.gsc ? { gsc: prev.gsc } : {}), ...(prev?.ga4 ? { ga4: prev.ga4 } : {}), ...data }
+      } else {
+        // GSC and GA4 live under their own key
+        next = { ...(prev ?? {}), [type]: data }
+      }
+      supabase.from('site_audits')
+        .update({ sf_data: next, updated_at: new Date().toISOString() })
+        .eq('id', id)
+      return next
+    })
   }
 
-  async function handleSFClear() {
-    setSfData(null)
-    await supabase
-      .from('site_audits')
-      .update({ sf_data: null, updated_at: new Date().toISOString() })
-      .eq('id', id)
+  async function handleSFClear(type) {
+    setSfData(prev => {
+      if (!prev) return null
+      let next
+      if (type === 'internal') {
+        // Remove root-level internal fields, keep gsc/ga4
+        next = {}
+        if (prev.gsc) next.gsc = prev.gsc
+        if (prev.ga4) next.ga4 = prev.ga4
+      } else {
+        next = { ...prev }
+        delete next[type]
+      }
+      const val = Object.keys(next).length ? next : null
+      supabase.from('site_audits')
+        .update({ sf_data: val, updated_at: new Date().toISOString() })
+        .eq('id', id)
+      return val
+    })
   }
 
   async function runScan() {
