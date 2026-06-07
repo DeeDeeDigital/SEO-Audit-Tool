@@ -32,9 +32,9 @@ export const AUDIT_SECTIONS = [
     items: [
       // robots.txt
       { id: 'robots_200',          severity: 'critical', label: 'robots.txt exists at domain root and returns 200', automated: true, automatedKey: 'robots.exists' },
-      { id: 'robots_no_blocks',    severity: 'critical', label: 'No CSS, JS, or image resources blocked by robots.txt', automated: true, automatedKey: 'robots.blocksAssets', invertedPass: true },
-      { id: 'robots_sitemap_dir',  severity: 'high',     label: 'Sitemap URL(s) referenced in robots.txt via Sitemap: directive', automated: true, automatedKey: 'robots.hasSitemapDirective' },
-      { id: 'robots_crawl_delay',  severity: 'low',      label: 'No crawl-delay directive (Googlebot ignores it; Bingbot is slowed by it)', automated: true, automatedKey: 'robots.hasCrawlDelay', invertedPass: true },
+      { id: 'robots_no_blocks',    severity: 'critical', label: 'No CSS, JS, or image resources blocked by robots.txt' },
+      { id: 'robots_sitemap_dir',  severity: 'high',     label: 'Sitemap URL(s) referenced in robots.txt via Sitemap: directive', automated: true, automatedKey: 'robots.hasSitemap' },
+      { id: 'robots_crawl_delay',  severity: 'low',      label: 'No crawl-delay directive (Googlebot ignores it; Bingbot is slowed by it)', automated: true, automatedKey: 'robots.crawlDelay', nullIsPass: true },
       { id: 'robots_no_conflicts', severity: 'medium',   label: 'No conflicting Allow/Disallow rules — tested in GSC robots.txt tester' },
       // sitemaps
       { id: 'sitemap_exists',      severity: 'high',     label: 'XML sitemap exists and returns 200', automated: true, automatedKey: 'sitemap.exists' },
@@ -45,8 +45,8 @@ export const AUDIT_SECTIONS = [
       { id: 'sitemap_lastmod',     severity: 'low',      label: 'Sitemap lastmod dates reflect real content changes (not auto-regenerated daily)' },
       { id: 'sitemap_dynamic',     severity: 'medium',   label: 'Sitemap updates automatically when new content is published' },
       // https / redirects
-      { id: 'https_redirect',      severity: 'critical', label: 'HTTP redirects to HTTPS via 301 (tested: http://domain.com → https://domain.com)', automated: true, automatedKey: 'https.httpRedirectsToHttps' },
-      { id: 'https_loads',         severity: 'critical', label: 'HTTPS version loads successfully (SSL certificate valid)', automated: true, automatedKey: 'https.httpsLoads' },
+      { id: 'https_redirect',      severity: 'critical', label: 'HTTP redirects to HTTPS via 301 (tested: http://domain.com → https://domain.com)', automated: true, automatedKey: 'https.httpRedirects' },
+      { id: 'https_loads',         severity: 'critical', label: 'HTTPS version loads successfully (SSL certificate valid)' },
       { id: 'www_redirect',        severity: 'high',     label: 'www / non-www resolved to a single canonical version via 301' },
       { id: 'trailing_slash',      severity: 'medium',   label: 'Trailing slash vs no trailing slash is consistent site-wide' },
       // indexation
@@ -55,16 +55,16 @@ export const AUDIT_SECTIONS = [
       { id: 'priority_indexed',    severity: 'critical', label: 'All priority pages (homepage, key service/product pages) confirmed indexed in GSC' },
       { id: 'gsc_not_indexed',     severity: 'high',     label: 'GSC "Discovered/Crawled - not indexed" URLs reviewed and categorized (quality issue vs crawl budget)' },
       // canonicalization
-      { id: 'self_canonical',      severity: 'high',     label: 'Every page has a self-referencing canonical tag (absolute URL, not relative)' },
+      { id: 'self_canonical',      severity: 'high',     label: 'Every page has a self-referencing canonical tag (absolute URL, not relative)', sfAutoKey: 'missingCanonical', sfPassIfZero: true },
       { id: 'canonical_correct',   severity: 'high',     label: 'Canonical tags point to final destination — no canonicals pointing to redirect targets' },
       { id: 'google_overrides',    severity: 'medium',   label: 'GSC "Duplicate, Google chose different canonical" URLs reviewed — causes investigated' },
       // architecture
-      { id: 'url_structure',       severity: 'medium',   label: 'URLs are short, descriptive, keyword-relevant, use hyphens (not underscores), all lowercase' },
-      { id: 'crawl_depth',         severity: 'medium',   label: 'Key pages are no more than 3 clicks from homepage (Screaming Frog Crawl Depth report)' },
+      { id: 'url_structure',       severity: 'medium',   label: 'URLs are short, descriptive, keyword-relevant, use hyphens (not underscores), all lowercase', sfAutoKey: 'urlStructureIssues', sfPassIfZero: true },
+      { id: 'crawl_depth',         severity: 'medium',   label: 'Key pages are no more than 3 clicks from homepage (Screaming Frog Crawl Depth report)', sfAutoKey: 'pagesDeepThan3', sfPassIfZero: true },
       { id: 'faceted_nav',         severity: 'medium',   label: 'Faceted navigation / URL parameters not generating excessive crawlable URLs' },
       // CWV
-      { id: 'cwv_mobile',          severity: 'high',     label: 'Mobile PageSpeed performance score 75+', automated: true, automatedKey: 'pageSpeed.mobile.performance', threshold: 75 },
-      { id: 'cwv_desktop',         severity: 'medium',   label: 'Desktop PageSpeed performance score 75+', automated: true, automatedKey: 'pageSpeed.desktop.performance', threshold: 75 },
+      { id: 'cwv_mobile',          severity: 'high',     label: 'Mobile PageSpeed performance score 75+', automated: true, automatedKey: 'pagespeed.mobile.score', threshold: 75 },
+      { id: 'cwv_desktop',         severity: 'medium',   label: 'Desktop PageSpeed performance score 75+', automated: true, automatedKey: 'pagespeed.desktop.score', threshold: 75 },
       { id: 'cwv_gsc',             severity: 'high',     label: 'GSC Core Web Vitals report: "Good" URLs trending up, "Poor" URLs documented and addressed' },
     ],
   },
@@ -73,14 +73,14 @@ export const AUDIT_SECTIONS = [
     id: 'onpage',
     title: '3. On-Page SEO',
     items: [
-      { id: 'title_unique',       severity: 'high',   label: 'Every page has a unique, keyword-optimized title tag (50–60 characters)' },
+      { id: 'title_unique',       severity: 'high',   label: 'Every page has a unique, keyword-optimized title tag (50–60 characters)', sfAutoKey: 'titleIssues', sfPassIfZero: true },
       { id: 'title_format',       severity: 'medium', label: 'Title tags follow a consistent format (Keyword — Differentiator | Brand)' },
-      { id: 'meta_desc',          severity: 'medium', label: 'Every page has a unique meta description (under 155 characters) — no auto-generated descriptions' },
-      { id: 'h1_single',          severity: 'high',   label: 'Every page has exactly one H1 — includes the target keyword, near the top of the content' },
+      { id: 'meta_desc',          severity: 'medium', label: 'Every page has a unique meta description (under 155 characters) — no auto-generated descriptions', sfAutoKey: 'missingMeta', sfPassIfZero: true },
+      { id: 'h1_single',          severity: 'high',   label: 'Every page has exactly one H1 — includes the target keyword, near the top of the content', sfAutoKey: 'h1Issues', sfPassIfZero: true },
       { id: 'heading_hierarchy',  severity: 'medium', label: 'Heading structure is logical (H2s beneath H1, H3s beneath H2s — no skipped levels)' },
       { id: 'image_alt',          severity: 'medium', label: 'All images have descriptive alt text (keyword-relevant where natural)' },
       { id: 'internal_links',     severity: 'high',   label: 'Key pages have adequate internal links pointing to them — no orphaned priority pages' },
-      { id: 'no_broken_links',    severity: 'high',   label: 'No broken internal or external links (Screaming Frog scan complete)' },
+      { id: 'no_broken_links',    severity: 'high',   label: 'No broken internal or external links (Screaming Frog scan complete)', sfAutoKey: 'broken4xx', sfPassIfZero: true },
       { id: 'schema_org',         severity: 'high',   label: 'Organization or LocalBusiness schema on homepage with accurate NAP' },
       { id: 'schema_pages',       severity: 'medium', label: 'Appropriate schema on key page types: Article, Product, Service, FAQ, BreadcrumbList' },
       { id: 'schema_valid',       severity: 'high',   label: 'All schema validated in Google Rich Results Test — no errors, only valid warnings' },
@@ -286,13 +286,31 @@ export function getNestedValue(obj, path) {
   return path.split('.').reduce((cur, key) => cur?.[key], obj)
 }
 
-export function computeAutoStatus(item, technicalData) {
-  if (!item.automated || !technicalData) return null
-  const val = getNestedValue(technicalData, item.automatedKey)
-  if (val === undefined || val === null) return null
-  if (item.threshold != null) return typeof val === 'number' && val >= item.threshold ? 'pass' : 'fail'
-  if (item.invertedPass)       return val === false ? 'pass' : val === true ? 'fail' : null
-  return val === true ? 'pass' : val === false ? 'fail' : null
+export function computeAutoStatus(item, technicalData, sfData) {
+  // ── Technical scan auto-status (robots, sitemap, HTTPS, PageSpeed) ──────────
+  if (item.automated && technicalData) {
+    // nullIsPass: value being absent/null is itself the pass condition (e.g. no crawl-delay)
+    if (item.nullIsPass) {
+      const val = getNestedValue(technicalData, item.automatedKey)
+      return (val === null || val === undefined || val === '') ? 'pass' : 'fail'
+    }
+    const val = getNestedValue(technicalData, item.automatedKey)
+    if (val !== undefined && val !== null) {
+      if (item.threshold != null) return typeof val === 'number' && val >= item.threshold ? 'pass' : 'fail'
+      if (item.invertedPass)      return !val ? 'pass' : 'fail'
+      return val === true ? 'pass' : val === false ? 'fail' : null
+    }
+  }
+
+  // ── Screaming Frog crawl auto-status ─────────────────────────────────────────
+  if (item.sfAutoKey && sfData) {
+    const val = sfData[item.sfAutoKey]
+    if (val !== undefined && val !== null) {
+      if (item.sfPassIfZero) return val === 0 ? 'pass' : 'fail'
+    }
+  }
+
+  return null
 }
 
 export const TOTAL_ITEMS = AUDIT_SECTIONS.reduce((s, sec) => s + sec.items.length, 0)

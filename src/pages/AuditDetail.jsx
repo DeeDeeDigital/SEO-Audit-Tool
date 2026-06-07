@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext'
 import {
   AUDIT_SECTIONS, ALL_ITEMS, severityClasses, computeAutoStatus,
 } from '../lib/auditSections'
+import SFUpload from '../components/SFUpload'
 
 // null → pass → fail → na → null
 const STATUS_CYCLE = [null, 'pass', 'fail', 'na']
@@ -41,14 +42,14 @@ function SeverityPill({ severity }) {
   )
 }
 
-function computeStats(sections, technicalData) {
+function computeStats(sections, technicalData, sfData) {
   let pass = 0, fail = 0, na = 0, todo = 0
   let critFail = 0, highFail = 0
 
   ALL_ITEMS.forEach(item => {
     const sec = AUDIT_SECTIONS.find(s => s.items.some(i => i.id === item.id))
     if (!sec) return
-    const autoStatus = item.automated ? computeAutoStatus(item, technicalData) : null
+    const autoStatus = computeAutoStatus(item, technicalData, sfData)
     const rawStatus = sections[sec.id]?.[item.id] ?? null
     const status = rawStatus ?? autoStatus
 
@@ -77,6 +78,7 @@ export default function AuditDetail() {
 
   const [sections, setSections] = useState({})
   const [technicalData, setTechnicalData] = useState(null)
+  const [sfData, setSfData] = useState(null)
   const [notes, setNotes] = useState('')
   const [auditMeta, setAuditMeta] = useState(null)
   const [saving, setSaving] = useState(false)
@@ -100,6 +102,7 @@ export default function AuditDetail() {
       if (error) throw error
       setSections(data.sections ?? {})
       setTechnicalData(data.technical_data ?? null)
+      setSfData(data.sf_data ?? null)
       setNotes(data.notes ?? '')
       setAuditMeta({
         id: data.id,
@@ -146,6 +149,22 @@ export default function AuditDetail() {
     setOpenSections(Object.fromEntries(AUDIT_SECTIONS.map(s => [s.id, false])))
   }
 
+  async function handleSFUpload(data) {
+    setSfData(data)
+    await supabase
+      .from('site_audits')
+      .update({ sf_data: data, updated_at: new Date().toISOString() })
+      .eq('id', id)
+  }
+
+  async function handleSFClear() {
+    setSfData(null)
+    await supabase
+      .from('site_audits')
+      .update({ sf_data: null, updated_at: new Date().toISOString() })
+      .eq('id', id)
+  }
+
   async function runScan() {
     if (!auditMeta?.domain) return
     setScanning(true)
@@ -177,7 +196,7 @@ export default function AuditDetail() {
         const autoStatus = item.automated ? computeAutoStatus(item, technicalData) : null
         const rawStatus = sections[section.id]?.[item.id] ?? null
         const status = rawStatus ?? autoStatus ?? ''
-        rows.push([section.label, item.label, item.severity, status, item.automated ? 'yes' : 'no'])
+        rows.push([section.title, item.label, item.severity, status, (item.automated || item.sfAutoKey) ? 'yes' : 'no'])
       })
     })
     const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
@@ -208,7 +227,7 @@ export default function AuditDetail() {
     )
   }
 
-  const stats = computeStats(sections, technicalData)
+  const stats = computeStats(sections, technicalData, sfData)
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -339,6 +358,9 @@ export default function AuditDetail() {
           {technicalData && <TechnicalResults data={technicalData} />}
         </div>
 
+        {/* Screaming Frog upload */}
+        <SFUpload sfData={sfData} onUpload={handleSFUpload} onClear={handleSFClear} />
+
         {/* Notes */}
         <div className="card">
           <label className="label">Audit Notes</label>
@@ -371,6 +393,7 @@ export default function AuditDetail() {
               section={section}
               sectionData={sections[section.id] ?? {}}
               technicalData={technicalData}
+              sfData={sfData}
               isOpen={openSections[section.id] ?? false}
               onToggle={() => toggleSection(section.id)}
               onToggleItem={(itemId, autoStatus) => toggleItem(section.id, itemId, autoStatus)}
@@ -386,9 +409,9 @@ export default function AuditDetail() {
   )
 }
 
-function SectionAccordion({ section, sectionData, technicalData, isOpen, onToggle, onToggleItem }) {
+function SectionAccordion({ section, sectionData, technicalData, sfData, isOpen, onToggle, onToggleItem }) {
   const sectionStats = section.items.reduce((acc, item) => {
-    const autoStatus = item.automated ? computeAutoStatus(item, technicalData) : null
+    const autoStatus = computeAutoStatus(item, technicalData, sfData)
     const status = sectionData[item.id] ?? autoStatus
     if (status === 'pass') acc.pass++
     else if (status === 'fail') acc.fail++
@@ -402,7 +425,7 @@ function SectionAccordion({ section, sectionData, technicalData, isOpen, onToggl
         className="w-full flex items-center gap-3 px-5 py-3.5 text-left hover:bg-gray-50 transition-colors"
       >
         <div className="flex-1 min-w-0">
-          <span className="font-semibold text-sm text-gray-900">{section.label}</span>
+          <span className="font-semibold text-sm text-gray-900">{section.title}</span>
           <span className="text-xs text-gray-400 ml-2">{section.items.length} items</span>
         </div>
         <div className="flex items-center gap-3 text-xs flex-shrink-0">
@@ -422,10 +445,12 @@ function SectionAccordion({ section, sectionData, technicalData, isOpen, onToggl
       {isOpen && (
         <div className="border-t border-gray-100">
           {section.items.map((item, idx) => {
-            const autoStatus = item.automated ? computeAutoStatus(item, technicalData) : null
+            const autoStatus = computeAutoStatus(item, technicalData, sfData)
             const rawStatus = sectionData[item.id] ?? null
             const effectiveStatus = rawStatus ?? autoStatus
-            const isOverridden = item.automated && rawStatus !== null
+            const isAutoSourced = (item.automated || item.sfAutoKey) && rawStatus === null && autoStatus !== null
+            const isOverridden = (item.automated || item.sfAutoKey) && rawStatus !== null
+            const autoLabel = item.sfAutoKey && !item.automated ? 'sf' : 'auto'
 
             return (
               <div
@@ -441,7 +466,7 @@ function SectionAccordion({ section, sectionData, technicalData, isOpen, onToggl
                 <div className="w-5 h-5 flex items-center justify-center flex-shrink-0">
                   <StatusIcon
                     status={effectiveStatus}
-                    isAuto={item.automated && !rawStatus}
+                    isAuto={isAutoSourced}
                   />
                 </div>
 
@@ -456,8 +481,8 @@ function SectionAccordion({ section, sectionData, technicalData, isOpen, onToggl
                 </span>
 
                 <div className="flex items-center gap-1.5 flex-shrink-0">
-                  {item.automated && !rawStatus && autoStatus && (
-                    <span className="text-xs text-blue-400 font-medium">auto</span>
+                  {isAutoSourced && (
+                    <span className="text-xs text-blue-400 font-medium">{autoLabel}</span>
                   )}
                   {isOverridden && (
                     <span className="text-xs text-amber-500 font-medium">override</span>
