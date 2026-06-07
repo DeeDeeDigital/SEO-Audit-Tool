@@ -1,9 +1,12 @@
 name = "seo-audit-tool"
+main = "./worker.js"
 compatibility_date = "2024-01-01"
 
-# Static assets — serves the Vite build output
+# Static assets — served by worker.js via env.ASSETS.fetch()
+# binding = "ASSETS" makes them accessible inside the Worker
 [assets]
 directory = "./dist"
+binding = "ASSETS"
 
 # Environment variables for local dev
 # Copy .env.example to .env and fill in values — Wrangler reads .env automatically
