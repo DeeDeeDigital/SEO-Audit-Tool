@@ -221,20 +221,41 @@ export default function AuditDetail() {
   }
 
   function exportCSV() {
-    const rows = [['Section', 'Item', 'Severity', 'Status', 'Auto-Checked']]
+    const rows = [['Section', 'Item', 'Severity', 'Status', 'Finding', 'Auto-Detected']]
+
     AUDIT_SECTIONS.forEach(section => {
       section.items.forEach(item => {
-        const autoStatus = item.automated ? computeAutoStatus(item, technicalData) : null
-        const rawStatus = sections[section.id]?.[item.id] ?? null
-        const status = rawStatus ?? autoStatus ?? ''
-        rows.push([section.title, item.label, item.severity, status, (item.automated || item.sfAutoKey) ? 'yes' : 'no'])
+        const autoStatus = computeAutoStatus(item, technicalData, sfData)
+        const rawStatus  = sections[section.id]?.[item.id] ?? null
+        const effective  = rawStatus ?? autoStatus
+
+        const statusLabel =
+          effective === 'pass' ? 'PASS' :
+          effective === 'fail' ? 'FAIL' :
+          effective === 'na'   ? 'N/A'  : ''
+
+        const finding = buildExportFinding(item, technicalData, sfData)
+
+        rows.push([
+          section.title ?? '',
+          item.label,
+          item.severity,
+          statusLabel,
+          finding,
+          (item.automated || item.sfAutoKey) ? 'Yes' : '',
+        ])
       })
     })
-    const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
+
+    // UTF-8 BOM + CRLF so Excel opens it cleanly
+    const csv = rows
+      .map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','))
+      .join('\r\n')
+
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
     a.download = `seo-audit-${auditMeta?.domain ?? id}-${new Date().toISOString().slice(0, 10)}.csv`
     a.click()
     URL.revokeObjectURL(url)
@@ -449,6 +470,97 @@ export default function AuditDetail() {
     </div>
   )
 }
+
+// ── Export helper — builds the "Finding" string for each checklist item ────────
+
+function buildExportFinding(item, technicalData, sfData) {
+  // ── Technical scan items ────────────────────────────────────────────────────
+  if (item.automated && technicalData) {
+    switch (item.id) {
+      case 'robots_200':
+        return technicalData.robots?.exists
+          ? 'robots.txt returns 200'
+          : 'robots.txt not found (returns error or 404)'
+      case 'robots_sitemap_dir':
+        return technicalData.robots?.hasSitemap
+          ? `Sitemap: directive found — ${technicalData.robots.sitemapUrl}`
+          : 'No Sitemap: directive in robots.txt'
+      case 'robots_crawl_delay':
+        return technicalData.robots?.crawlDelay
+          ? `Crawl-delay set to ${technicalData.robots.crawlDelay}s`
+          : 'No crawl-delay directive (correct)'
+      case 'sitemap_exists': {
+        const s = technicalData.sitemap
+        if (!s?.exists) return 'No sitemap found at common paths'
+        const parts = [`Sitemap at ${s.url}`]
+        if (s.urlCount) parts.push(`${s.urlCount} URLs`)
+        if (s.isIndex)  parts.push('sitemap index')
+        return parts.join(' — ')
+      }
+      case 'https_redirect':
+        return technicalData.https?.httpRedirects
+          ? 'HTTP → HTTPS 301 redirect confirmed'
+          : 'HTTP does NOT redirect to HTTPS'
+      case 'cwv_mobile': {
+        const m = technicalData.pagespeed?.mobile
+        if (!m) return 'Score unavailable'
+        const parts = [`Mobile: ${m.score}/100`]
+        if (m.lcp) parts.push(`LCP: ${m.lcp}`)
+        if (m.cls) parts.push(`CLS: ${m.cls}`)
+        if (m.tbt) parts.push(`TBT: ${m.tbt}`)
+        return parts.join(' | ')
+      }
+      case 'cwv_desktop': {
+        const d = technicalData.pagespeed?.desktop
+        return d?.score != null ? `Desktop: ${d.score}/100` : 'Score unavailable'
+      }
+      default:
+        return ''
+    }
+  }
+
+  // ── SF / crawl data items ───────────────────────────────────────────────────
+  if (item.sfAutoKey && sfData) {
+    const val = sfData[item.sfAutoKey]
+    if (val === undefined || val === null) return ''
+    const src = sfData.source === 'internal-crawler' ? 'Built-in crawl' : 'Screaming Frog'
+    const n   = Number(val).toLocaleString()
+    switch (item.sfAutoKey) {
+      case 'broken4xx':
+        return val === 0 ? `${src}: no broken links found` : `${src}: ${n} broken (4xx) pages found`
+      case 'urlStructureIssues':
+        return val === 0
+          ? `${src}: no URL structure issues`
+          : `${src}: ${n} pages with underscores or uppercase in URL`
+      case 'pagesDeepThan3':
+        return val === 0
+          ? `${src}: all pages within 3 clicks of homepage`
+          : `${src}: ${n} pages more than 3 clicks from homepage`
+      case 'titleIssues':
+        return val === 0
+          ? `${src}: all title tags OK`
+          : `${src}: ${n} title issues — missing: ${sfData.missingTitle ?? 0}, duplicate: ${sfData.duplicateTitles ?? 0}`
+      case 'missingMeta':
+        return val === 0
+          ? `${src}: all pages have meta descriptions`
+          : `${src}: ${n} pages missing meta description`
+      case 'h1Issues':
+        return val === 0
+          ? `${src}: all H1s OK`
+          : `${src}: ${n} H1 issues — missing: ${sfData.missingH1 ?? 0}, multiple: ${sfData.multipleH1 ?? 0}`
+      case 'missingCanonical':
+        return val === 0
+          ? `${src}: all pages have canonical tags`
+          : `${src}: ${n} pages missing self-referencing canonical`
+      default:
+        return val === 0 ? `${src}: 0 found` : `${src}: ${n} found`
+    }
+  }
+
+  return ''
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function SectionAccordion({ section, sectionData, technicalData, sfData, isOpen, onToggle, onToggleItem }) {
   const sectionStats = section.items.reduce((acc, item) => {
