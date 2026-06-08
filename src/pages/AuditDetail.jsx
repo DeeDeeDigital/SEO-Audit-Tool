@@ -11,6 +11,7 @@ import {
   AUDIT_SECTIONS, ALL_ITEMS, severityClasses, computeAutoStatus,
 } from '../lib/auditSections'
 import SFUpload from '../components/SFUpload'
+import CrawlManager from '../components/CrawlManager'
 
 // null → pass → fail → na → null
 const STATUS_CYCLE = [null, 'pass', 'fail', 'na']
@@ -187,6 +188,14 @@ export default function AuditDetail() {
     })
   }
 
+  function handleCrawlComplete(summary) {
+    handleSFUpload(summary, 'internal')
+  }
+
+  function handleClearCrawl() {
+    handleSFClear('internal')
+  }
+
   async function runScan() {
     if (!auditMeta?.domain) return
     setScanning(true)
@@ -250,6 +259,8 @@ export default function AuditDetail() {
   }
 
   const stats = computeStats(sections, technicalData, sfData)
+  // Crawl data is stored in sfData when source is the built-in crawler
+  const crawlData = sfData?.source === 'internal-crawler' ? sfData : null
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -380,7 +391,15 @@ export default function AuditDetail() {
           {technicalData && <TechnicalResults data={technicalData} />}
         </div>
 
-        {/* Screaming Frog upload */}
+        {/* Site Crawl */}
+        <CrawlManager
+          domain={auditMeta?.domain}
+          crawlData={crawlData}
+          onCrawlComplete={handleCrawlComplete}
+          onClearCrawl={handleClearCrawl}
+        />
+
+        {/* Screaming Frog upload (GSC + GA4 enrichment) */}
         <SFUpload sfData={sfData} onUpload={handleSFUpload} onClear={handleSFClear} />
 
         {/* Notes */}

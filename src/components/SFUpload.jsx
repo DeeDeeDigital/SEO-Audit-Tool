@@ -195,7 +195,8 @@ export default function SFUpload({ sfData, onUpload, onClear }) {
   const [detected, setDetected] = useState(null) // last detected type
 
   // Which data sources are loaded
-  const hasInternal = !!(sfData?.totalPages)
+  // Exclude internal crawl data — that's shown by CrawlManager, not here
+  const hasInternal = !!(sfData?.totalPages) && sfData?.source !== 'internal-crawler'
   const hasGSC      = !!(sfData?.gsc)
   const hasGA4      = !!(sfData?.ga4)
   const anyLoaded   = hasInternal || hasGSC || hasGA4
@@ -251,7 +252,7 @@ export default function SFUpload({ sfData, onUpload, onClear }) {
         <div>
           <h2 className="text-sm font-semibold text-gray-800">Screaming Frog Data</h2>
           <p className="text-xs text-gray-400 mt-0.5">
-            Upload Internal, Search Console, or GA4 exports — auto-detected from columns
+            Upload GSC and GA4 exports for performance data — auto-detected from columns
           </p>
         </div>
         <button
@@ -315,7 +316,7 @@ export default function SFUpload({ sfData, onUpload, onClear }) {
         >
           <FileText size={24} className="text-gray-300 mx-auto mb-2" />
           <p className="text-sm text-gray-500">Drag &amp; drop a Screaming Frog CSV here, or click to browse</p>
-          <p className="text-xs text-gray-400 mt-1">Internal, Search Console, or GA4 export — auto-detected</p>
+          <p className="text-xs text-gray-400 mt-1">Search Console, GA4, or Internal export — auto-detected</p>
         </div>
       )}
 

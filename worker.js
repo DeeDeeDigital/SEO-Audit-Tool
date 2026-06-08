@@ -10,9 +10,12 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url)
 
-    // ── API route ──────────────────────────────────────────────────────────────
+    // ── API routes ─────────────────────────────────────────────────────────────
     if (url.pathname === '/api/scan' && request.method === 'POST') {
       return handleScan(request, env)
+    }
+    if (url.pathname === '/api/crawl' && request.method === 'POST') {
+      return handleCrawl(request, env)
     }
 
     // ── Static assets with SPA fallback ───────────────────────────────────────
@@ -196,4 +199,220 @@ async function checkPageSpeed(base, apiKey) {
 
   const [mobile, desktop] = await Promise.all([runStrategy('mobile'), runStrategy('desktop')])
   return { mobile, desktop }
+}
+
+// ─── /api/crawl ───────────────────────────────────────────────────────────────
+
+async function handleCrawl(request, env) {
+  try {
+    const body = await request.json()
+    const { urls, domain } = body
+
+    if (!Array.isArray(urls) || !urls.length || !domain) {
+      return Response.json({ error: 'urls[] and domain are required' }, { status: 400 })
+    }
+
+    const domainBase = domain.startsWith('http') ? domain : `https://${domain}`
+    let domainHostname
+    try {
+      domainHostname = new URL(domainBase).hostname
+    } catch {
+      return Response.json({ error: 'Invalid domain' }, { status: 400 })
+    }
+
+    // Cap at 12 URLs per batch to stay well within Worker CPU limits
+    const batch = urls.slice(0, 12)
+
+    const settled = await Promise.allSettled(
+      batch.map(url => crawlPage(url, domainHostname))
+    )
+
+    const results = []
+    const discoveredSet = new Set()
+
+    for (const r of settled) {
+      if (r.status === 'fulfilled') {
+        const page = r.value
+        results.push(page)
+        for (const link of page.links ?? []) {
+          discoveredSet.add(link)
+        }
+      } else {
+        results.push({ url: 'unknown', statusCode: 0, error: r.reason?.message ?? 'failed', links: [] })
+      }
+    }
+
+    return Response.json({ results, discovered: [...discoveredSet] })
+  } catch (err) {
+    return Response.json({ error: err.message }, { status: 500 })
+  }
+}
+
+async function crawlPage(url, domainHostname) {
+  const t0 = Date.now()
+  let res
+
+  try {
+    res = await fetch(url, {
+      redirect: 'manual',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; SEOAuditBot/1.0)',
+        'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+      },
+      signal: AbortSignal.timeout(10000),
+    })
+
+    const responseTime = Date.now() - t0
+    const statusCode = res.status
+    const contentType = (res.headers.get('content-type') ?? '').toLowerCase()
+    const isHtml = contentType.includes('text/html')
+
+    // Redirect — drain body and collect the target link if it's internal
+    if (statusCode >= 300 && statusCode < 400) {
+      const location = res.headers.get('location') ?? ''
+      let resolvedLocation = ''
+      try {
+        const resolved = new URL(location, url)
+        resolved.hash = ''
+        resolvedLocation = resolved.href
+      } catch { /* invalid location */ }
+      try { await res.body?.cancel() } catch {}
+      const links = []
+      try {
+        if (resolvedLocation && new URL(resolvedLocation).hostname === domainHostname) {
+          links.push(resolvedLocation)
+        }
+      } catch {}
+      return { url, statusCode, redirectUrl: resolvedLocation, isHtml: false, responseTime, links }
+    }
+
+    // Non-HTML or error — drain and return
+    if (!isHtml || statusCode >= 400) {
+      try { await res.body?.cancel() } catch {}
+      return { url, statusCode, contentType, isHtml: false, responseTime, links: [] }
+    }
+
+    // Parse HTML ──────────────────────────────────────────────────────────────
+    const state = {
+      title: '',
+      metaDesc: '',
+      canonical: '',
+      robotsMeta: '',
+      noindex: false,
+      h1s: [],
+      h2Count: 0,
+      wordCount: 0,
+      imagesTotal: 0,
+      imagesMissingAlt: 0,
+      internalLinkCount: 0,
+      externalLinkCount: 0,
+      _internalLinks: new Set(),
+      _h1Text: null,
+    }
+
+    const rewriter = new HTMLRewriter()
+      .on('title', {
+        text(chunk) { state.title += chunk.text },
+      })
+      .on('meta[name="description"]', {
+        element(el) {
+          const c = el.getAttribute('content')
+          if (c !== null) state.metaDesc = c
+        },
+      })
+      .on('meta[name="robots"]', {
+        element(el) {
+          const c = (el.getAttribute('content') ?? '').toLowerCase()
+          if (c) { state.robotsMeta = c; state.noindex = c.includes('noindex') }
+        },
+      })
+      .on('link[rel="canonical"]', {
+        element(el) {
+          const h = el.getAttribute('href')
+          if (h) state.canonical = h
+        },
+      })
+      .on('h1', {
+        element(el) {
+          state._h1Text = ''
+          el.onEndTag(() => {
+            state.h1s.push((state._h1Text ?? '').trim())
+            state._h1Text = null
+          })
+        },
+        text(chunk) {
+          if (state._h1Text !== null) state._h1Text += chunk.text
+        },
+      })
+      .on('h2', { element() { state.h2Count++ } })
+      .on('img', {
+        element(el) {
+          state.imagesTotal++
+          if (el.getAttribute('alt') === null) state.imagesMissingAlt++
+        },
+      })
+      .on('a[href]', {
+        element(el) {
+          const href = (el.getAttribute('href') ?? '').trim()
+          if (!href || href.startsWith('#') || href.startsWith('mailto:') ||
+              href.startsWith('tel:') || href.startsWith('javascript:')) return
+          try {
+            const resolved = new URL(href, url)
+            resolved.hash = ''
+            const clean = resolved.origin + resolved.pathname + (resolved.search || '')
+            if (resolved.hostname === domainHostname) {
+              state._internalLinks.add(clean)
+              state.internalLinkCount++
+            } else {
+              state.externalLinkCount++
+            }
+          } catch { /* invalid URL */ }
+        },
+      })
+      .on('p, li', {
+        text(chunk) {
+          if (chunk.text.trim()) {
+            state.wordCount += chunk.text.trim().split(/\s+/).filter(Boolean).length
+          }
+        },
+      })
+
+    await rewriter.transform(res).arrayBuffer()
+
+    const titleTrimmed = state.title.trim()
+    const metaTrimmed = state.metaDesc.trim()
+
+    return {
+      url,
+      statusCode,
+      isHtml: true,
+      responseTime,
+      title: titleTrimmed,
+      titleLength: titleTrimmed.length,
+      metaDesc: metaTrimmed,
+      metaDescLength: metaTrimmed.length,
+      canonical: state.canonical,
+      robotsMeta: state.robotsMeta,
+      noindex: state.noindex,
+      h1Count: state.h1s.length,
+      h2Count: state.h2Count,
+      wordCount: state.wordCount,
+      imagesTotal: state.imagesTotal,
+      imagesMissingAlt: state.imagesMissingAlt,
+      internalLinkCount: state.internalLinkCount,
+      externalLinkCount: state.externalLinkCount,
+      links: [...state._internalLinks],
+    }
+  } catch (err) {
+    try { await res?.body?.cancel() } catch {}
+    return {
+      url,
+      statusCode: 0,
+      error: err.message,
+      isHtml: false,
+      responseTime: Date.now() - t0,
+      links: [],
+    }
+  }
 }
