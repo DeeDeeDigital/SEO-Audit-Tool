@@ -463,15 +463,7 @@ export default function AuditDetail() {
           {technicalData && <TechnicalResults data={technicalData} />}
         </div>
 
-        {/* Site Crawl */}
-        <CrawlManager
-          domain={auditMeta?.domain}
-          crawlData={crawlData}
-          onCrawlComplete={handleCrawlComplete}
-          onClearCrawl={handleClearCrawl}
-        />
-
-        {/* Screaming Frog upload (GSC + GA4 enrichment) */}
+        {/* Data uploads — SF internal, Search Console, GA4 */}
         <SFUpload sfData={sfData} onUpload={handleSFUpload} onClear={handleSFClear} />
 
         {/* Notes */}
