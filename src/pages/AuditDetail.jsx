@@ -12,6 +12,7 @@ import {
 } from '../lib/auditSections'
 import SFUpload from '../components/SFUpload'
 import CrawlManager from '../components/CrawlManager'
+import { generateReportHTML } from '../lib/generateReport'
 
 // null → pass → fail → na → null
 const STATUS_CYCLE = [null, 'pass', 'fail', 'na']
@@ -261,6 +262,53 @@ export default function AuditDetail() {
     URL.revokeObjectURL(url)
   }
 
+  function exportReport() {
+    const findings  = []
+    const passes    = []
+    const unchecked = []
+
+    AUDIT_SECTIONS.forEach(section => {
+      section.items.forEach(item => {
+        const autoStatus = computeAutoStatus(item, technicalData, sfData)
+        const rawStatus  = sections[section.id]?.[item.id] ?? null
+        const effective  = rawStatus ?? autoStatus
+        const finding    = buildExportFinding(item, technicalData, sfData)
+
+        const row = {
+          section:  section.title ?? '',
+          label:    item.label,
+          severity: item.severity,
+          status:   effective,
+          finding,
+        }
+
+        if (effective === 'fail') findings.push(row)
+        else if (effective === 'pass') passes.push(row)
+        else if (effective !== 'na') unchecked.push(row)
+      })
+    })
+
+    const html = generateReportHTML({
+      domain:       auditMeta?.domain ?? '',
+      auditName:    auditMeta?.name ?? auditMeta?.domain ?? '',
+      dateStr:      new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+      stats,
+      technicalData,
+      sfData,
+      findings,
+      passes,
+      unchecked,
+    })
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8;' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `seo-audit-report-${auditMeta?.domain ?? id}-${new Date().toISOString().slice(0, 10)}.html`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-screen gap-2 text-gray-400 text-sm">
@@ -303,8 +351,11 @@ export default function AuditDetail() {
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           {saving && <span className="text-xs text-gray-400 hidden sm:inline">Saving...</span>}
-          <button onClick={exportCSV} className="btn-secondary flex items-center gap-1.5 text-xs">
-            <Download size={13} /> Export
+          <button onClick={exportReport} className="btn-secondary flex items-center gap-1.5 text-xs">
+            <Download size={13} /> Report
+          </button>
+          <button onClick={exportCSV} className="btn-ghost text-xs text-gray-400 hover:text-gray-600" title="Export raw checklist as CSV">
+            CSV
           </button>
           <button onClick={signOut} className="btn-ghost p-2" title="Sign out">
             <LogOut size={14} />
